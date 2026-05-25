@@ -1,0 +1,8 @@
+Make sure Psql command is uncommented in user_data.sh
+Plan the whole project
+Terrform Plan
+Terraform apply -target="module.vpc" -target="module.rds" -target="module.sg" -target="module.ec2_basion"
+once tested application in basion host
+comment psql import query in user_data.tftpl
+Terrform Plan
+Terraform apply

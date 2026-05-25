@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# 1. Update system packages and install Docker
+sudo dnf update -y
+sudo dnf install -y docker postgresql18
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker ec2-user
+
+
+# 2. Fetch the dynamic secrets from AWS Parameter Store
+# The --query "Parameter.Value" --output text flags extract just the raw string
+# The --with-decryption flag decrypts SecureStrings automatically
+
+DB_HOST=$(aws ssm get-parameter --name "/production/myrds/database/host" --region "ap-south-2" --query "Parameter.Value" --output text)
+DB_NAME=$(aws ssm get-parameter --name "/production/myrds/database/db_name" --region "ap-south-2" --query "Parameter.Value" --output text)
+DB_USER=$(aws ssm get-parameter --name "/production/myrds/database/username" --region "ap-south-2" --query "Parameter.Value" --output text)
+DB_PASS=$(aws ssm get-parameter --name "/production/myrds/database/password" --region "ap-south-2" --with-decryption --query "Parameter.Value" --output text)
+DB_SERVER="$${DB_HOST%%:*}"
+
+# Write multi-line SQL commands to a temporary file
+cat << 'SQL_EOF' > /home/ec2-user/init_db.sql
+-- Create tasks table with PostgreSQL-specific data types
+CREATE TABLE IF NOT EXISTS tasks (
+    id BIGSERIAL PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'archived')),
+    due_date TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for better query performance
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);
+CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);
+
+-- Create trigger function to automatically update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger to call the function on update
+CREATE TRIGGER update_tasks_updated_at
+BEFORE UPDATE ON tasks
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+
+-- Insert sample data
+INSERT INTO tasks (title, description, status, due_date) VALUES
+    ('Complete Project Setup', 'Set up Flask application with PostgreSQL', 'in_progress', CURRENT_TIMESTAMP + INTERVAL '3 days'),
+    ('Design Database Schema', 'Create task management database schema', 'completed', CURRENT_TIMESTAMP - INTERVAL '1 day'),
+    ('Build Frontend UI', 'Create responsive dashboard with Tailwind CSS', 'pending', CURRENT_TIMESTAMP + INTERVAL '7 days'),
+    ('Deploy to Production', 'Set up deployment pipeline and monitoring', 'pending', CURRENT_TIMESTAMP + INTERVAL '14 days');
+SQL_EOF
+
+#PGPASSWORD="$DB_PASS" psql -h "$DB_SERVER" -U "$DB_USER" -d "$DB_NAME" -f /home/ec2-user/init_db.sql
+
+# 3. Pull your Docker image
+docker pull vinocloud/task-manager-app:latest
+
+# 4. Run the container, injecting the securely fetched variables
+docker run -d \
+  --name task-app \
+  -p 80:5000 \
+  -e DB_HOST="$DB_SERVER" \
+  -e DB_NAME="$DB_NAME" \
+  -e DB_USER="$DB_USER" \
+  -e DB_PASSWORD="$DB_PASS" \
+  -e DB_PORT=5432 \
+  -e FLASK_ENV="development" \
+  -e SECRET_KEY="dev-secret-key-change-in-production" \
+  --restart unless-stopped \
+  vinocloud/task-manager-app:latest

@@ -1,0 +1,29 @@
+# Local .terraform directories (contains provider plugins and modules)
+.terraform/
+
+# Hide local state files
+*.tfstate
+*.tfstate.*
+
+# Exclude crash logs
+crash.log
+crash.*.log
+
+# Exclude sensitive variable files (where you keep secrets)
+*.tfvars
+*.tfvars.json
+
+# Exclude override files (local testing tweaks)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Exclude CLI configuration files
+.terraformrc
+terraform.rc
+
+# Exclude Terraform Cloud/Enterprise log and plan cache files
+.terraform.lock.hcl
+
+.tfbackend
